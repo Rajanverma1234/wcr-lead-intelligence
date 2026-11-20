@@ -177,6 +177,17 @@ def test_no_currency_conversion(result):
         assert "AED" in out.loc[lead_id, "Budget"]
 
 
+def test_review_fixes(result):
+    # L019 asked to be called in January 2027 -> message confirms it instead of asking "when"
+    assert "January 2027" in row(result, "L019").Suggested_WhatsApp
+    assert "When would be a good time" not in row(result, "L019").Suggested_WhatsApp
+    # L022 next action does not repeat "exit/rental case"
+    assert row(result, "L022").Next_Action.count("exit/rental case") == 1
+    # L009 "₹7–8 Cr" -> "Up to ₹8 Cr" is the same ceiling, not a conflict; real changes still flagged
+    assert row(result, "L009").Conflict_Flags == "None"
+    assert "4 Cr" in row(result, "L002").Conflict_Flags
+
+
 def test_priority_list_sheet(result):
     import io
 

@@ -73,7 +73,7 @@ def next_action(lead, fields, signals, duplicate_of: str = "") -> str:
         if "rera" in deps and not any("RERA" in m for m in materials):
             actions.append("share legal/RERA details")
         if "numbers" in deps:
-            actions.append("prepare the investment numbers (exit/rental case)")
+            actions.append("prepare the investment numbers")
         if signals.get("callback"):
             m = re.search(r"(call later|call next week|call in \w+ \d{4}|reconnect after \d+ weeks)",
                           signals["callback"], re.IGNORECASE)
@@ -136,7 +136,11 @@ def suggested_whatsapp(lead, fields, signals) -> str:
     elif signals.get("updates") and location.source in ("latest", "previous"):
         second = f"I will keep sharing updates on {location.value} projects."
     elif signals.get("callback"):
-        second = "When would be a good time to call you?"
+        # If the client already said WHEN to call (e.g. "call in January 2027"), confirm it instead of asking again
+        when = re.search(r"call in ((?:January|February|March|April|May|June|July|August|September|October"
+                         r"|November|December) \d{4})", signals["callback"])
+        second = (f"As requested, I will call you in {when.group(1)}." if when
+                  else "When would be a good time to call you?")
     else:
         second = "Please let me know if you would like any more details."
 
