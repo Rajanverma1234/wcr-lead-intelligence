@@ -20,7 +20,9 @@ OUTPUT_COLUMNS = [  # exact names from the Output_Template sheet
     "Site_Visit_Status", "Objection_or_Dependency", "Next_Action", "Lead_Temperature",
     "Buying_Probability_0_100", "Confidence_0_100", "Evidence", "Suggested_WhatsApp",
 ]
-EXTRA_COLUMNS = ["Client_Name", "Market", "Conflict_Flags", "Duplicate_Of", "Score_Breakdown"]
+EXTRA_COLUMNS = ["Client_Name", "Market", "Conflict_Flags", "Duplicate_Of", "Score_Breakdown",
+                 # round 2
+                 "Timeline_Category", "Timeline_History"]
 FIELD_LABELS = {  # short labels used inside the Evidence column
     "Budget": "Budget", "Timeline": "Timeline", "Purpose": "Purpose",
     "Projects_Discussed": "Projects", "Location_Preference": "Location",
@@ -84,6 +86,8 @@ def process_lead(row, duplicate_of: str = "", llm_fields: dict | None = None) ->
         "Conflict_Flags": conflict_text or "None",
         "Duplicate_Of": duplicate_of or "None",
         "Score_Breakdown": " | ".join(score["breakdown"]),
+        "Timeline_Category": fields["Timeline"].meta["category"],
+        "Timeline_History": fields["Timeline"].meta["resolution"]["history"] or "None",
     }
     details = {
         "fields": {name: res.as_dict() for name, res in display_fields.items()},

@@ -18,6 +18,10 @@ import re
 from dataclasses import dataclass, field
 from datetime import date
 
+from .timeline import LATEST as TL_LATEST
+from .timeline import NONE as TL_NONE
+from .timeline import resolve_timeline
+
 NA = "Not Available"
 
 # Field confidence by where the value came from
@@ -153,94 +157,17 @@ def extract_budget(lead) -> FieldResult:
 
 
 # ================================================================ TIMELINE
-# Sentences about visits/travel describe a SITE VISIT, not a buying timeline.
-VISIT_WORDS = re.compile(r"\b(visit|travel)", re.IGNORECASE)
-TENTATIVE_WORDS = re.compile(r"\b(maybe|probably|may|might|if)\b", re.IGNORECASE)
-
-
-def find_timeline(sentences, contact_date: date | None = None):
-    """Return (text as stated, evidence, meta). meta.horizon_days is only set
-    when it is clearly computable; meta.negative marks 'not before / no plan'.
-    """
-    full_text = " ".join(sentences)
-    for s in sentences:
-        low = s.lower()
-        if VISIT_WORDS.search(s):
-            continue
-
-        # 1. No plan to buy at all
-        if re.search(r"no plan to buy", low):
-            return "No plan to buy right now", [s], {"horizon_days": None, "negative": True}
-
-        # 2. "not ... for (at least / the next) N months"
-        m = re.search(r"\b(?:no|not)\b[^.]*?\bfor (?:at least |the next )?(\d+)\s*(months?|years?)", low)
-        if m:
-            n, unit = int(m.group(1)), m.group(2)
-            days = n * (365 if unit.startswith("year") else 30)
-            if "follow up" in low:
-                text = f"No follow-up for the next {n} {unit} (client request)"
-            else:
-                text = f"No purchase for at least {n} {unit}"
-            return text, [s], {"horizon_days": days, "negative": True, "months": n}
-
-        # 3. A month + year written in the text, e.g. "December 2027"
-        m = re.search(MONTH_RE + r"\s+(\d{4})", s)
-        if m:
-            month, year = m.group(1), int(m.group(2))
-            evidence = [s]
-            negative = "before" in low
-            # "Asked us to call in January 2027 ... No purchase before that."
-            follow = re.search(r"no purchase before that[^.]*\.", full_text, re.IGNORECASE)
-            if not negative and follow:
-                negative = True
-                evidence.append(follow.group(0))
-            text = f"Not before {month} {year}" if negative else f"{month} {year}"
-            horizon = None
-            if contact_date:
-                horizon = (date(year, MONTHS.index(month.lower()) + 1, 1) - contact_date).days
-            return text, evidence, {"horizon_days": horizon, "negative": negative}
-
-        # 4. "within N days/weeks/months" or "within 3–4 months"
-        m = re.search(r"within (\d+)\s*(?:(?:–|-|to)\s*(\d+))?\s*(days?|weeks?|months?)", low)
-        if m:
-            a, b, unit = m.group(1), m.group(2), m.group(3)
-            per = {"d": 1, "w": 7, "m": 30}[unit[0]]
-            days = int(b or a) * per
-            text = f"Within {a}{'–' + b if b else ''} {unit}"
-            if TENTATIVE_WORDS.search(s):
-                text += " (tentative)"
-            return text, [s], {"horizon_days": days, "negative": False, "phrase": m.group(0)}
-
-        # 5. "after Diwali" (+ optional "roughly 3 months from now")
-        if "after diwali" in low:
-            m = re.search(r"(\d+) months from now", low)
-            text = f"After Diwali (roughly {m.group(1)} months)" if m else "After Diwali"
-            days = int(m.group(1)) * 30 if m else None
-            return text, [s], {"horizon_days": days, "negative": False, "phrase": "after Diwali"}
-
-        # 6. "N months from now"
-        m = re.search(r"(\d+) months from now", low)
-        if m:
-            return f"About {m.group(1)} months from now", [s], {"horizon_days": int(m.group(1)) * 30, "negative": False}
-
-        # 7. Short relative periods
-        for phrase, text, days in (("this month", "This month", 30), ("this quarter", "This quarter", 90),
-                                   ("next month", "Next month", 60), ("this week", "This week", 7)):
-            if phrase in low:
-                if TENTATIVE_WORDS.search(s):
-                    text += " (tentative)"
-                return text, [s], {"horizon_days": days, "negative": False, "phrase": phrase}
-
-        # 8. Vague "next year" -> never a fake date
-        if "next year" in low:
-            return "Sometime next year (no month given)", [s], {"horizon_days": None, "negative": False, "vague": True}
-    return None
-
-
+# Round 2: classification lives in timeline.py (CONFIRMED / TENTATIVE / VAGUE /
+# UNCERTAIN / LONG_DELAY / NONE) with latest-overrides-previous.
 def extract_timeline(lead) -> FieldResult:
-    latest, previous = lead_sentences(lead)
-    contact = _parse_date(lead.get("Last_Contact_Date", ""))
-    return _from_sources(find_timeline, latest, previous, contact_date=contact) or FieldResult()
+    resolution = resolve_timeline(lead)
+    eff = resolution["effective"]
+    meta = {"category": eff.category, "months": eff.months_estimate, "raw": eff.raw_text,
+            "resolution": resolution}
+    if eff.category == TL_NONE:
+        return FieldResult(meta=meta)
+    source = "latest" if eff.source == TL_LATEST else "previous"
+    return FieldResult(eff.display, [eff.evidence], CONFIDENCE[source], source, meta)
 
 
 # ================================================================ PURPOSE

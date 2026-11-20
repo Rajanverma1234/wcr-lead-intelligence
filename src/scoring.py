@@ -14,22 +14,53 @@ WEIGHTS = {
     "negotiation": 30,             # negotiating / asked for final offer
     "visit_completed_or_confirmed": 25,
     "visit_tentative": 10,
-    "timeline_30_days": 20,        # <= 30 days or "this month"
-    "timeline_3_months": 10,       # <= 90 days
-    "timeline_6_months": 5,        # <= 180 days
     "clear_budget": 5,
     "budget_increased": 5,
     "specific_requirement": 5,     # BHK, number of units, specific project
     "requested_material": 5,       # payment plan, floor plan, inventory, ...
     "per_dependency": -10,         # family decision, sell property, waiting...
     "budget_mismatch": -20,        # cannot stretch
-    "far_timeline": -25,           # > 6 months or "not before <far date>"
+    "far_timeline": -25,           # LONG_DELAY: > 6 months away
     "not_interested": -40,         # not interested / do not follow up / no plan to buy
     "no_requirement": -20,         # nothing captured at all
 }
+# Timeline points by category (round 2). (max months, points) - first match wins.
+# VAGUE / UNCERTAIN / NONE = 0. LONG_DELAY uses WEIGHTS["far_timeline"].
+TIMELINE_POINTS = {
+    "CONFIRMED": ((1, 20), (3, 10), (6, 5)),
+    "TENTATIVE": ((1, 10), (3, 5), (6, 2)),
+}
 HOT_THRESHOLD = 70   # >= 70 Hot
 WARM_THRESHOLD = 40  # 40-69 Warm, < 40 Cold
-FAR_DAYS = 180       # more than ~6 months away
+COLD_OVERRIDE_MONTHS = 12  # a LONG_DELAY of 12+ months is always Cold
+
+
+def timeline_points(category: str, months: float | None) -> int:
+    if category == "LONG_DELAY":
+        return WEIGHTS["far_timeline"]
+    if months is None:
+        return 0
+    for limit, points in TIMELINE_POINTS.get(category, ()):
+        if months <= limit:
+            return points
+    return 0
+
+
+def timeline_line(timeline_meta: dict) -> tuple[int, str]:
+    """Points + an explicit Score_Breakdown line for the effective timeline."""
+    resolution = timeline_meta["resolution"]
+    eff = resolution["effective"]
+    points = timeline_points(eff.category, eff.months_estimate)
+    where = {"LATEST_REMARK": "latest", "PREVIOUS_REMARK": "previous remark"}.get(eff.source, "no remark")
+    m = eff.months_estimate
+    approx = f", ~{m:g} month{'' if m == 1 else 's'}" if m is not None else ""
+    quote = f' "{eff.raw_text}"' if eff.raw_text else ""
+    line = f"Timeline: {eff.category} ({where}{approx}){quote} → {points:+d} pts" if points else \
+        f"Timeline: {eff.category} ({where}){quote} → 0 pts"
+    ignored = resolution.get("ignored_previous")
+    if ignored:
+        line += f"; previous '{ignored.raw_text}' ignored for scoring"
+    return points, line
 
 
 def _short(sentence: str, n: int = 70) -> str:
@@ -58,20 +89,12 @@ def score_lead(lead: dict, fields: dict, signals: dict) -> dict:
     elif status == "Tentative":
         apply("visit_tentative", "site visit tentative")
 
-    # Timeline
+    # Timeline (effective = latest remark if it says anything; previous never adds points then)
     timeline = fields["Timeline"]
-    days = timeline.meta.get("horizon_days")
-    negative = timeline.meta.get("negative", False)
-    if timeline.value != NA and days is not None:
-        if negative or days > FAR_DAYS:
-            if days >= FAR_DAYS:
-                apply("far_timeline", f"long delay: {timeline.value}")
-        elif days <= 30:
-            apply("timeline_30_days", f"timeline within 30 days: {timeline.value}")
-        elif days <= 90:
-            apply("timeline_3_months", f"timeline within 3 months: {timeline.value}")
-        elif days <= FAR_DAYS:
-            apply("timeline_6_months", f"timeline within 6 months: {timeline.value}")
+    t_points, t_line = timeline_line(timeline.meta)
+    score += t_points
+    lines.append(t_line)
+    category, months = timeline.meta.get("category"), timeline.meta.get("months")
 
     # Budget (only counts when the client said it in a remark, not just a CRM column)
     budget = fields["Budget"]
@@ -114,7 +137,7 @@ def score_lead(lead: dict, fields: dict, signals: dict) -> dict:
         temperature = "Cold"
 
     # Override: explicit "not interested / don't follow up / no investment for 12+ months" is always Cold
-    long_pause = negative and days is not None and days >= 365
+    long_pause = category == "LONG_DELAY" and months is not None and months >= COLD_OVERRIDE_MONTHS
     if (signals.get("not_interested") or long_pause) and temperature != "Cold":
         temperature = "Cold"
         lines.append("Override → Cold (client said not interested / no investment for 12+ months)")

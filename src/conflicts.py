@@ -7,8 +7,7 @@ We run the SAME finder functions separately on previous and latest remarks
 """
 from __future__ import annotations
 
-from .extractor import (NA, find_location, find_purpose, find_timeline,
-                        lead_sentences, parse_budget_text, _parse_date)
+from .extractor import NA, find_location, find_purpose, lead_sentences, parse_budget_text
 
 
 def _budget_key(parsed: dict | None):
@@ -55,10 +54,13 @@ def detect_conflicts(lead: dict, fields: dict) -> dict:
         for text, labels in seen.values():
             add("Budget", f"Budget changed: {text} ({', '.join(labels)}) → {budget.value} ({budget.source})")
 
-    # ---- Timeline / Purpose / Location: previous vs latest
-    contact = _parse_date(lead.get("Last_Contact_Date", ""))
+    # ---- Timeline: classified separately per remark in timeline.resolve_timeline()
+    timeline_flag = fields["Timeline"].meta.get("resolution", {}).get("conflict_flag")
+    if timeline_flag:
+        add("Timeline", timeline_flag)
+
+    # ---- Purpose / Location: previous vs latest
     checks = [
-        ("Timeline", lambda s: find_timeline(s, contact_date=contact)),
         ("Purpose", find_purpose),
         ("Location_Preference", find_location),
     ]

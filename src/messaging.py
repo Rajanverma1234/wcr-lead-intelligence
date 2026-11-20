@@ -46,7 +46,7 @@ def next_action(lead, fields, signals, duplicate_of: str = "") -> str:
             msg += f". Send only the requested {_join(materials)}"
         actions.append(msg + "; move to long-term nurture")
     # 3. Long delay stated by the client
-    elif timeline.meta.get("negative") and (timeline.meta.get("horizon_days") or 0) >= 180:
+    elif timeline.meta.get("category") == "LONG_DELAY":
         actions.append(f"Do not push now ({timeline.value}); keep in nurture and set a reminder")
         if visit == "Not Now":
             actions.append("do not push for a site visit")
@@ -121,7 +121,7 @@ def suggested_whatsapp(lead, fields, signals) -> str:
     # ---- Sentence 2: one closing line chosen from the strongest fact
     if signals.get("negotiation"):
         second = ""
-    elif signals.get("not_interested") or (timeline.meta.get("negative") and (timeline.meta.get("horizon_days") or 0) >= 180):
+    elif signals.get("not_interested") or timeline.meta.get("category") == "LONG_DELAY":
         second = "No rush at all – I will check in later, and feel free to reach out anytime."
     elif "flight" in deps:
         second = "Please let me know once your flight is confirmed so we can lock the site visit."
@@ -131,8 +131,10 @@ def suggested_whatsapp(lead, fields, signals) -> str:
         second = "Happy to answer any questions you and your family may have."
     elif visit == "Tentative":
         second = "Please let me know a convenient day and time for the site visit."
-    elif timeline.value != NA and timeline.meta.get("phrase") and not timeline.meta.get("negative"):
-        second = f"I will stay in touch regarding your plan to invest {timeline.meta['phrase']}."
+    elif timeline.meta.get("category") == "CONFIRMED":  # only a firm window is repeated back to the client
+        second = f"I will stay in touch regarding your plan to buy {timeline.meta['raw']}."
+    elif timeline.meta.get("category") == "TENTATIVE":
+        second = "I will stay in touch as you plan your purchase - no pressure at all."
     elif signals.get("updates") and location.source in ("latest", "previous"):
         second = f"I will keep sharing updates on {location.value} projects."
     elif signals.get("callback"):
