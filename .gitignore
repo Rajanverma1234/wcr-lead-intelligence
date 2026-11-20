@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+
+# Vercel CLI link + pulled env files (contain account info / tokens)
+.vercel
+.env*
+!.env.example

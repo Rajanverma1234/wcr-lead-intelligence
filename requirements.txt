@@ -1,0 +1,11 @@
+# Core (required)
+streamlit
+pandas
+openpyxl
+pytest
+python-dotenv
+
+# Optional LLM layer (the app works fully without these being used)
+anthropic
+openai
+requests

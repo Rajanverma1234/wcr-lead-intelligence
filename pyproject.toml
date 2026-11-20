@@ -1,0 +1,13 @@
+# Used by Vercel to install the web version's dependencies (api/index.py).
+# For local development use requirements.txt (includes Streamlit, pytest, LLM SDKs).
+[project]
+name = "wcr-lead-intelligence"
+version = "1.0.0"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "python-multipart",
+    "pandas",
+    "openpyxl",
+    "python-dotenv",
+]
