@@ -20,7 +20,8 @@ import json
 import os
 import re
 
-from .extractor import CONFIDENCE, NA, FieldResult
+from .evidence import check_field
+from .extractor import CONFIDENCE, LATEST_REMARK, NA, PREVIOUS_REMARK, FieldResult
 from .loader import build_source_text
 from .validator import validate_field
 
@@ -135,9 +136,10 @@ def llm_extract_validated(row: dict, provider: str = "anthropic") -> dict:
         if value == NA or not evidence:
             continue
         in_latest = evidence.lower() in row.get("Latest_Remarks", "").lower()
-        result = FieldResult(value, [evidence], CONFIDENCE["latest" if in_latest else "previous"],
-                             "llm", note=f"LLM ({provider}), evidence validated")
-        result = validate_field(result, source_text)
-        if result.value != NA:
+        source = LATEST_REMARK if in_latest else PREVIOUS_REMARK
+        result = FieldResult(value, [evidence], CONFIDENCE[source], source,
+                             note=f"LLM ({provider}), evidence validated")
+        # same round-2 validator as the rule-based fields (evidence must be in THAT remark)
+        if validate_field(result, source_text).value != NA and not check_field(row, field_name, result):
             accepted[field_name] = result
     return accepted

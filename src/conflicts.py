@@ -15,7 +15,7 @@ is flagged as CURRENCY_DIFFERENT and never converted.
 """
 from __future__ import annotations
 
-from .extractor import (NA, find_budget, find_location, find_projects, find_purpose,
+from .extractor import (LATEST_REMARK, NA, REMARK_SOURCES, find_budget, find_location, find_projects, find_purpose,
                         find_site_visit, lead_sentences, parse_budget_text)
 
 AED_TO_INR: float | None = None      # set a rate here to allow AED <-> INR comparison
@@ -84,8 +84,8 @@ def detect_conflicts(lead: dict, fields: dict) -> dict:
     budget = fields["Budget"]
     recorded = lead.get("Recorded_Budget", "")
     crm = parse_budget_text(recorded) if recorded else None
-    if budget.value != NA and budget.source in ("latest", "previous") and crm:
-        where = "latest remark" if budget.source == "latest" else "previous remark"
+    if budget.value != NA and budget.source in REMARK_SOURCES and crm:
+        where = "latest remark" if budget.source == LATEST_REMARK else "previous remark"
         crm_result = compare_budgets(crm, budget.meta)
         if crm_result == "CURRENCY_DIFFERENT":
             add("Budget", f'CURRENCY_DIFFERENT: CRM Recorded_Budget "{recorded}" vs "{budget.value}" ({where})'
@@ -96,7 +96,7 @@ def detect_conflicts(lead: dict, fields: dict) -> dict:
     # ---- Projects: CRM column vs remark
     projects = fields["Projects_Discussed"]
     crm_projects = projects.meta.get("crm_names", [])
-    remark_projects = projects.meta.get("names", []) if projects.source in ("latest", "previous") else []
+    remark_projects = projects.meta.get("names", []) if projects.source in REMARK_SOURCES else []
     missing = [p for p in crm_projects if p not in remark_projects]
     if remark_projects and missing:
         add("Projects_Discussed", f'CRM_VS_REMARK_MISMATCH: CRM Recorded_Project "{lead.get("Recorded_Project", "")}"'

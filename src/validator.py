@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-from .extractor import CONFIDENCE, KNOWN_LOCATIONS, KNOWN_PROJECTS, NA, FieldResult
+from .extractor import KNOWN_LOCATIONS, KNOWN_PROJECTS, NA, SRC_NONE, FieldResult
 
 NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 MONTH_WORDS = ["January", "February", "March", "April", "May", "June", "July", "August",
@@ -50,7 +50,7 @@ def validate_field(result: FieldResult, source_text: str) -> FieldResult:
         if number not in joined_evidence:
             problems.append(f"number {number} not in evidence")
     if problems:
-        return FieldResult(NA, [], max(0, CONFIDENCE["inferred"] - 10), "rejected",
+        return FieldResult(NA, [], 40, SRC_NONE,
                            note="Rejected by validator: " + "; ".join(problems))
     return result
 

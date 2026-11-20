@@ -9,11 +9,11 @@ import pandas as pd
 
 from .conflicts import detect_conflicts
 from .duplicates import find_duplicates
-from .extractor import NA, detect_signals, extract_all
+from .evidence import validate_evidence
+from .extractor import NA, SOURCE_LABELS, detect_signals, extract_all
 from .loader import build_source_text
 from .messaging import next_action, suggested_whatsapp
 from .scoring import score_lead
-from .validator import validate_field
 
 OUTPUT_COLUMNS = [  # exact names from the Output_Template sheet
     "Lead_ID", "Budget", "Timeline", "Purpose", "Projects_Discussed", "Location_Preference",
@@ -22,7 +22,8 @@ OUTPUT_COLUMNS = [  # exact names from the Output_Template sheet
 ]
 EXTRA_COLUMNS = ["Client_Name", "Market", "Conflict_Flags", "Duplicate_Of", "Score_Breakdown",
                  # round 2
-                 "Timeline_Category", "Timeline_History", "Dependencies_List"]
+                 "Timeline_Category", "Timeline_History", "Dependencies_List", "CRM_Market",
+                 "Field_Sources", "Validation_Issues"]
 FIELD_LABELS = {  # short labels used inside the Evidence column
     "Budget": "Budget", "Timeline": "Timeline", "Purpose": "Purpose",
     "Projects_Discussed": "Projects", "Location_Preference": "Location",
@@ -31,14 +32,24 @@ FIELD_LABELS = {  # short labels used inside the Evidence column
 
 
 def _evidence_column(fields: dict) -> str:
-    """'Budget/Purpose: "<quote>" | Visit: "<quote>"' - identical quotes merged."""
-    by_quote: dict[str, list[str]] = {}
+    """'Budget/Purpose [Client remark (Latest)]: "<quote>" | Projects [CRM column (Recorded_Project)]: "..."'
+
+    Identical quotes from the same source are merged. The label always says whether the
+    quote is a client remark or a CRM column.
+    """
+    by_quote: dict[tuple, list[str]] = {}
     for name, result in fields.items():
         if result.value == NA:
             continue
         for quote in result.evidence:
-            by_quote.setdefault(quote, []).append(FIELD_LABELS[name])
-    return " | ".join(f'{"/".join(labels)}: "{quote}"' for quote, labels in by_quote.items()) or NA
+            by_quote.setdefault((quote, result.source), []).append(FIELD_LABELS[name])
+    return " | ".join(f'{"/".join(labels)} [{SOURCE_LABELS.get(src, src)}]: "{quote}"'
+                      for (quote, src), labels in by_quote.items()) or NA
+
+
+def _sources_column(fields: dict) -> str:
+    return " | ".join(f"{FIELD_LABELS[name]}: {SOURCE_LABELS.get(f.source, f.source)}"
+                      for name, f in fields.items() if f.value != NA) or "None"
 
 
 def _dependencies_column(fields: dict) -> str:
@@ -51,8 +62,8 @@ def process_lead(row, duplicate_of: str = "", llm_fields: dict | None = None,
     lead = {k: ("" if pd.isna(v) else str(v)) for k, v in dict(row).items()}
     source_text = build_source_text(lead)
 
-    # 1. Rule-based extraction, then 2. validator (evidence must exist in the row)
-    fields = {name: validate_field(res, source_text) for name, res in extract_all(lead).items()}
+    # 1. Rule-based extraction, then 2. evidence/source validator (evidence must be in ITS remark/column)
+    fields, validation_issues = validate_evidence(lead, extract_all(lead))
 
     # Optional LLM values replace rule values ONLY if they passed the same validator
     display_fields = dict(fields)
@@ -71,6 +82,7 @@ def process_lead(row, duplicate_of: str = "", llm_fields: dict | None = None,
 
     # 4. Scoring (always from rule-based fields = source of truth)
     signals = detect_signals(lead)
+    validation_issues += signals.get("validation_issues", [])
     score = score_lead(lead, fields, signals)
 
     # 5. Messages
@@ -97,6 +109,9 @@ def process_lead(row, duplicate_of: str = "", llm_fields: dict | None = None,
         "Timeline_Category": fields["Timeline"].meta["category"],
         "Timeline_History": fields["Timeline"].meta["resolution"]["history"] or "None",
         "Dependencies_List": _dependencies_column(fields),
+        "CRM_Market": lead.get("Market", "") or NA,
+        "Field_Sources": _sources_column(display_fields),
+        "Validation_Issues": " | ".join(validation_issues) or "None",
     }
     details = {
         "fields": {name: res.as_dict() for name, res in display_fields.items()},

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from .extractor import NA
+from .extractor import NA, REMARK_SOURCES
 from .validator import validate_message
 
 NO_CONTACT_MESSAGE = "Not Applicable – client asked not to be contacted for now"
@@ -135,7 +135,7 @@ def suggested_whatsapp(lead, fields, signals) -> str:
         second = f"I will stay in touch regarding your plan to buy {timeline.meta['raw']}."
     elif timeline.meta.get("category") == "TENTATIVE":
         second = "I will stay in touch as you plan your purchase - no pressure at all."
-    elif signals.get("updates") and location.source in ("latest", "previous"):
+    elif signals.get("updates") and location.source in REMARK_SOURCES:
         second = f"I will keep sharing updates on {location.value} projects."
     elif signals.get("callback"):
         # If the client already said WHEN to call (e.g. "call in January 2027"), confirm it instead of asking again
