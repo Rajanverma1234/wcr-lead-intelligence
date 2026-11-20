@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 
 from .extractor import NA, REMARK_SOURCES
-from .validator import validate_message
+from .whatsapp_validator import DEPENDENCY_PHRASES, dependency_types, fix_whatsapp
 
 NO_CONTACT_MESSAGE = "Not Applicable – client asked not to be contacted for now"
 
@@ -91,18 +91,29 @@ def next_action(lead, fields, signals, duplicate_of: str = "") -> str:
     return text[0].upper() + text[1:]
 
 
-def suggested_whatsapp(lead, fields, signals) -> str:
-    """Max ~2 sentences, client's first name, only facts present in the row."""
-    if signals.get("no_contact"):
-        return NO_CONTACT_MESSAGE
+CALL_IN_MONTH = re.compile(r"call in ((?:January|February|March|April|May|June|July|August|September|October"
+                           r"|November|December) \d{4})")
 
+
+def _dependency_ack(fields) -> str:
+    phrases = list(dict.fromkeys(DEPENDENCY_PHRASES.get(t, "a few things on your side")
+                                 for t in dependency_types(fields)))
+    if not phrases:
+        return ""
+    return f"No rush at all – I understand this depends on {_join(phrases)}, so I will follow your pace."
+
+
+def draft_whatsapp(lead, fields, signals) -> str:
+    """Max ~2 sentences, client's first name, only facts from validated fields."""
     name = first_name(lead.get("Client_Name", ""))
     visit_meta = fields["Site_Visit_Status"].meta
     visit = visit_meta.get("status")
     timeline = fields["Timeline"]
+    category = timeline.meta.get("category")
     deps = " ".join(_dependency_labels(fields)).lower()
     materials = [label for label, _ in signals["materials"]]
     location = fields["Location_Preference"]
+    ack = _dependency_ack(fields)
 
     # ---- Sentence 1: what we are doing for the client
     if signals.get("negotiation"):
@@ -112,46 +123,48 @@ def suggested_whatsapp(lead, fields, signals) -> str:
         first = f"Hi {name}, looking forward to your site visit{' ' + when if when else ''}."
         if materials:
             first += f" Sharing the {_join(materials)} as requested."
-        return _safe(first, lead, name)
+        return f"{first} {ack}".strip()
     elif materials:
         first = f"Hi {name}, sharing the {_join(materials)} you asked for."
     else:
         first = f"Hi {name}, thank you for your time."
 
     # ---- Sentence 2: one closing line chosen from the strongest fact
+    callback_when = CALL_IN_MONTH.search(signals.get("callback") or "")
     if signals.get("negotiation"):
-        second = ""
-    elif signals.get("not_interested") or timeline.meta.get("category") == "LONG_DELAY":
+        second = ack
+    elif signals.get("not_interested") or category == "LONG_DELAY":
         second = "No rush at all – I will check in later, and feel free to reach out anytime."
+    elif callback_when:  # the client already said WHEN to call - confirm it instead of asking again
+        second = f"As requested, I will call you in {callback_when.group(1)} – no rush until then."
     elif "flight" in deps:
         second = "Please let me know once your flight is confirmed so we can lock the site visit."
     elif "mismatch" in deps:
         second = "I will share options that fit your budget."
-    elif "family" in deps or "wife" in deps:
-        second = "Happy to answer any questions you and your family may have."
+    elif ack:  # any dependency: acknowledge it politely, no pressure
+        second = ack
     elif visit == "Tentative":
         second = "Please let me know a convenient day and time for the site visit."
-    elif timeline.meta.get("category") == "CONFIRMED":  # only a firm window is repeated back to the client
+    elif category == "CONFIRMED":  # only a firm window is repeated back to the client
         second = f"I will stay in touch regarding your plan to buy {timeline.meta['raw']}."
-    elif timeline.meta.get("category") == "TENTATIVE":
+    elif category == "TENTATIVE":
         second = "I will stay in touch as you plan your purchase - no pressure at all."
     elif signals.get("updates") and location.source in REMARK_SOURCES:
         second = f"I will keep sharing updates on {location.value} projects."
     elif signals.get("callback"):
-        # If the client already said WHEN to call (e.g. "call in January 2027"), confirm it instead of asking again
-        when = re.search(r"call in ((?:January|February|March|April|May|June|July|August|September|October"
-                         r"|November|December) \d{4})", signals["callback"])
-        second = (f"As requested, I will call you in {when.group(1)}." if when
-                  else "When would be a good time to call you?")
+        second = "When would be a good time to call you?"
     else:
         second = "Please let me know if you would like any more details."
+    return f"{first} {second}".strip()
 
-    return _safe(f"{first} {second}".strip(), lead, name)
 
-
-def _safe(message: str, lead, name: str) -> str:
-    """Validator gate: any fact not in the row -> generic fact-free fallback."""
-    from .loader import build_source_text
-    if validate_message(message, build_source_text(lead)):
-        return message
-    return f"Hi {name}, following up on our recent conversation. Please let me know a good time to connect."
+def suggested_whatsapp(lead, fields, signals, other_names=()) -> tuple[str, str]:
+    """Draft -> validate_whatsapp -> (message, 'PASS' | 'FIXED: reasons')."""
+    if signals.get("no_contact"):
+        return NO_CONTACT_MESSAGE, "PASS (no message – client asked not to be contacted)"
+    name = first_name(lead.get("Client_Name", ""))
+    materials = [label for label, _ in signals["materials"]]
+    extra = [s for _, s in signals["materials"]] + [
+        signals[k] for k in ("negotiation", "callback", "today", "updates") if signals.get(k)]
+    return fix_whatsapp(draft_whatsapp(lead, fields, signals), name, fields, materials, extra,
+                        other_names, lead.get("Client_Name", ""))

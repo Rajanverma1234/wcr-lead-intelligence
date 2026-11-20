@@ -23,7 +23,7 @@ OUTPUT_COLUMNS = [  # exact names from the Output_Template sheet
 EXTRA_COLUMNS = ["Client_Name", "Market", "Conflict_Flags", "Duplicate_Of", "Score_Breakdown",
                  # round 2
                  "Timeline_Category", "Timeline_History", "Dependencies_List", "CRM_Market",
-                 "Field_Sources", "Validation_Issues"]
+                 "Field_Sources", "Validation_Issues", "WhatsApp_Validation"]
 FIELD_LABELS = {  # short labels used inside the Evidence column
     "Budget": "Budget", "Timeline": "Timeline", "Purpose": "Purpose",
     "Projects_Discussed": "Projects", "Location_Preference": "Location",
@@ -58,7 +58,7 @@ def _dependencies_column(fields: dict) -> str:
 
 
 def process_lead(row, duplicate_of: str = "", llm_fields: dict | None = None,
-                 duplicate_reason: str = "") -> tuple[dict, dict]:
+                 duplicate_reason: str = "", other_names: tuple = ()) -> tuple[dict, dict]:
     lead = {k: ("" if pd.isna(v) else str(v)) for k, v in dict(row).items()}
     source_text = build_source_text(lead)
 
@@ -87,7 +87,7 @@ def process_lead(row, duplicate_of: str = "", llm_fields: dict | None = None,
 
     # 5. Messages
     action = next_action(lead, fields, signals, duplicate_of)
-    whatsapp = suggested_whatsapp(lead, fields, signals)
+    whatsapp, whatsapp_status = suggested_whatsapp(lead, fields, signals, other_names)
 
     confidence = round(sum(f.confidence for f in display_fields.values()) / len(display_fields))
     conflict_text = " | ".join(flag for flags in conflicts.values() for flag in flags)
@@ -112,6 +112,7 @@ def process_lead(row, duplicate_of: str = "", llm_fields: dict | None = None,
         "CRM_Market": lead.get("Market", "") or NA,
         "Field_Sources": _sources_column(display_fields),
         "Validation_Issues": " | ".join(validation_issues) or "None",
+        "WhatsApp_Validation": whatsapp_status,
     }
     details = {
         "fields": {name: res.as_dict() for name, res in display_fields.items()},
@@ -134,7 +135,8 @@ def process_all(df: pd.DataFrame, use_llm: bool = False, llm_provider: str = "an
         if use_llm:
             from .llm_optional import llm_extract_validated
             llm_fields = llm_extract_validated(dict(row), provider=llm_provider)
-        out, det = process_lead(row, dup.get("duplicate_of", ""), llm_fields, dup.get("reason", ""))
+        others = tuple(n for n in df["Client_Name"] if n != row["Client_Name"])
+        out, det = process_lead(row, dup.get("duplicate_of", ""), llm_fields, dup.get("reason", ""), others)
         det["duplicate_reason"] = dup.get("reason", "")
         rows.append(out)
         details[lead_id] = det
