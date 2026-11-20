@@ -18,7 +18,7 @@ def name_similarity(a: str, b: str) -> float:
 
 
 def find_duplicates(df: pd.DataFrame) -> dict:
-    """Return {lead_id: {"duplicate_of": "L005", "reason": "..."}}.
+    """Return {lead_id: {"duplicate_of": "<other lead id>", "reason": "..."}}.
 
     Needs columns Lead_ID, Client_Name, Phone_Normalized. The earlier lead in
     the sheet is treated as the original; both sides point to each other.

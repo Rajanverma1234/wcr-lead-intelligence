@@ -262,7 +262,7 @@ def extract_projects(lead) -> FieldResult:
 KNOWN_LOCATIONS = ["Golf Course Extension Road", "Dwarka Expressway", "Dubai", "Noida", "Gurugram", "Gurgaon"]
 PREFERENCE_CUES = re.compile(
     r"(interested in|prefers?|looking (?:for|at|in)|asked about|decision is now|property in|only)", re.IGNORECASE)
-# A property the client OWNS or is SELLING is not a preference (L001 Noida)
+# A property the client OWNS or is SELLING is not a preference ("selling his Noida property")
 OWNERSHIP_CUES = re.compile(r"\b(owns?|owned|selling|sell)\b", re.IGNORECASE)
 
 
