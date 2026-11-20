@@ -1,7 +1,6 @@
 # Keep the Vercel bundle lean: only api/, src/, legacy/, data/ and vercel.json are needed
 .venv
 output
-outputs
 scripts
 tests
 __pycache__

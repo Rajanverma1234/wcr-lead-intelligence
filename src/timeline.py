@@ -7,7 +7,8 @@ Categories
   TENTATIVE  - hedged window ("probably in 2-3 months", "maybe within 3-4 months", "... if ...")
   VAGUE      - no usable window ("sometime next year", "in future", "later", "agle saal")
   UNCERTAIN  - explicitly unknown / on hold ("timeline is uncertain", "not sure when", "pakka nahi")
-  LONG_DELAY - more than 6 months away ("after 1 year", "no investment for 12 months", "postponed to 2028")
+  LONG_DELAY - STRICTLY more than 6 months away ("after 1 year", "no investment for 12 months",
+               "postponed to 2028"). Exactly 6 months is CONFIRMED / TENTATIVE by wording.
   NONE       - no timeline mentioned
 
 Rules
@@ -157,8 +158,9 @@ def _candidates_in_sentence(sentence: str, contact: date | None) -> list[Timelin
         #    before the call-back filter because it is still a buying signal
         m = NEGATIVE_PAUSE.search(clause)
         if m:
+            # a pause is not a buying window: > 6 months = LONG_DELAY, otherwise only an earliest date = VAGUE
             months = int(m.group(1)) * (12 if m.group(2).lower().startswith("year") else 1)
-            add(LONG_DELAY if months >= LONG_DELAY_MONTHS else VAGUE, m.group(0), months, "negative pause")
+            add(LONG_DELAY if months > LONG_DELAY_MONTHS else VAGUE, m.group(0), months, "negative pause")
             continue
         if NOT_PURCHASE_CLAUSE.search(clause):
             continue

@@ -6,7 +6,7 @@ sentence that triggered it, so any score can be explained line by line.
 """
 from __future__ import annotations
 
-from .conflicts import compare_budgets, remark_budgets
+from .conflicts import ceiling_increased, remark_budgets
 from .extractor import LATEST_REMARK, NA, REMARK_SOURCES
 
 # ---- All weights in ONE place (easy to explain and tune) -------------------
@@ -101,9 +101,10 @@ def score_lead(lead: dict, fields: dict, signals: dict) -> dict:
     budget = fields["Budget"]
     if budget.value != NA and budget.source in REMARK_SOURCES:
         apply("clear_budget", f"clear budget stated: {budget.value}")
-    # Budget increased = previous and latest remark ranges do NOT overlap and latest is higher
+    # Budget increased = latest stated upper bound > previous stated upper bound (same currency).
+    # Independent of the overlap check, which is used only for conflict flags.
     old, new = remark_budgets(lead)
-    if budget.source == LATEST_REMARK and compare_budgets(old, new) == "INCREASED":
+    if budget.source == LATEST_REMARK and ceiling_increased(old, new):
         apply("budget_increased", f"budget increased: {old['value']} → {new['value']}")
 
     # Specific requirement and requested material

@@ -22,6 +22,7 @@ from src.timeline import classify_remark  # noqa: E402
 from src.whatsapp_validator import fix_whatsapp, validate_whatsapp  # noqa: E402
 
 SCENARIOS = ROOT / "data" / "test_scenarios.xlsx"
+ENGINE_FILES = sorted((ROOT / "src").glob("*.py"))
 
 
 def sha256(path: Path) -> str:
@@ -236,10 +237,82 @@ def test_whatsapp_mentioning_another_lead_fails(scenarios):
                                                               client_name="Kabir Test"))
 
 
-# ------------------------------------------------------------------ 8. anti-hard-coding
-ENGINE_FILES = sorted((ROOT / "src").glob("*.py"))
+# ------------------------------------------------------------------ 8. round 2b corrections
+def synthetic_lead(previous: str, latest: str, **extra) -> dict:
+    lead = {"Lead_ID": "T001", "Client_Name": "Test Person", "Phone": "", "Market": "", "Current_Status": "",
+            "Last_Contact_Date": "2026-08-17", "Recorded_Project": "", "Recorded_Budget": "",
+            "Previous_Remarks": previous, "Latest_Remarks": latest}
+    lead.update(extra)
+    return lead
 
 
+def test_budget_ceiling_increase_scores_without_conflict():
+    from src.pipeline import process_lead
+    # overlapping ranges, higher ceiling: +5, but no budget conflict flag
+    out, _ = process_lead(synthetic_lead("Earlier said budget around ₹5 Cr.", "Now looking at ₹5–6 Cr."))
+    assert "+5 budget increased" in out["Score_Breakdown"]
+    assert not re.search(r"BUDGET_|CURRENCY_DIFFERENT", out["Conflict_Flags"])
+    # same ceiling ("₹7–8 Cr" -> "up to ₹8 Cr"): no increase, no conflict
+    out, _ = process_lead(synthetic_lead("Budget ₹7–8 Cr.", "Budget up to ₹8 Cr."))
+    assert "budget increased" not in out["Score_Breakdown"] and out["Conflict_Flags"] == "None"
+    # non-overlapping increase: +5 AND a BUDGET_INCREASED conflict flag
+    out, _ = process_lead(synthetic_lead("Budget around ₹4 Cr.", "Maximum ₹6.5 Cr now."))
+    assert "+5 budget increased" in out["Score_Breakdown"] and "BUDGET_INCREASED" in out["Conflict_Flags"]
+    # "around X" uses the stated X (not X+10%): around 5 -> up to 5.4 is an increase in ceiling
+    out, _ = process_lead(synthetic_lead("Budget around ₹5 Cr.", "Budget up to ₹5.4 Cr."))
+    assert "+5 budget increased" in out["Score_Breakdown"]
+
+
+def test_original_budget_leads_after_ceiling_rule(originals):
+    _, out, _ = originals
+    assert "+5 budget increased" in out.loc["L001"].Score_Breakdown
+    assert not re.search(r"BUDGET_", out.loc["L001"].Conflict_Flags)
+    assert "BUDGET_INCREASED" in out.loc["L002"].Conflict_Flags
+    assert "budget increased" not in out.loc["L009"].Score_Breakdown and out.loc["L009"].Conflict_Flags == "None"
+
+
+@pytest.mark.parametrize("text, category, points", [
+    ("Client wants to buy within 6 months.", "CONFIRMED", 5),        # exactly 6 = not a long delay
+    ("Probably will buy in 6 months.", "TENTATIVE", 2),
+    ("Wants to buy in 7 months.", "LONG_DELAY", -25),               # strictly more than 6
+    ("Not interested. Do not follow up for the next 6 months.", "VAGUE", 0),   # 6-month pause, no window
+    ("Do not follow up for the next 8 months.", "LONG_DELAY", -25),
+])
+def test_long_delay_is_strictly_more_than_six_months(text, category, points):
+    result = classify_remark(text)
+    assert result.category == category, result
+    assert timeline_points(result.category, result.months_estimate) == points
+
+
+def test_L008_still_zero_and_cold(originals):
+    _, out, _ = originals
+    r = out.loc["L008"]
+    assert r.Timeline_Category == "VAGUE"
+    assert r.Buying_Probability_0_100 == 0 and r.Lead_Temperature == "Cold"
+    assert "not interested / no follow-up" in r.Score_Breakdown
+    assert r.Suggested_WhatsApp.startswith("Not Applicable")
+
+
+def test_reference_date_is_last_contact_date():
+    from src.timeline import resolve_timeline
+    remark = "Client will buy by March 2027."
+    early = resolve_timeline(synthetic_lead("", remark, Last_Contact_Date="2026-08-17"))["effective"]
+    late = resolve_timeline(synthetic_lead("", remark, Last_Contact_Date="2026-12-01"))["effective"]
+    assert (early.category, early.months_estimate) == ("LONG_DELAY", 7)   # Aug 2026 -> Mar 2027
+    assert (late.category, late.months_estimate) == ("CONFIRMED", 3)      # Dec 2026 -> Mar 2027
+    no_date = resolve_timeline(synthetic_lead("", remark, Last_Contact_Date=""))["effective"]
+    assert no_date.months_estimate is None and timeline_points(no_date.category, None) == 0
+    for path in ENGINE_FILES:   # the engine never reads the clock
+        assert not re.search(r"\b(?:date|datetime)\.today\(|\.now\(", path.read_text(encoding="utf-8")), path.name
+
+
+def test_before_after_written_to_output_folder():
+    from scripts.compare_before_after import OUT_DIR
+    assert OUT_DIR == ROOT / "output"
+    assert not (ROOT / "outputs").exists()
+
+
+# ------------------------------------------------------------------ 9. anti-hard-coding
 def test_no_lead_id_literals_in_engine_source():
     assert ENGINE_FILES
     for path in ENGINE_FILES:

@@ -10,6 +10,7 @@ that the latest remark contradicts is never silently dropped - it becomes a flag
 
 Budgets are compared as RANGES in rupees (Cr / Lakh). A change is a conflict only
 when the ranges do NOT overlap, so "₹7–8 Cr" vs "up to ₹8 Cr" is not a conflict.
+(The +5 "budget increased" score uses ceiling_increased() instead - see below.)
 AED is converted only if AED_TO_INR is configured; otherwise a different currency
 is flagged as CURRENCY_DIFFERENT and never converted.
 """
@@ -49,6 +50,20 @@ def compare_budgets(old: dict | None, new: dict | None) -> str:
     if lo1 <= hi2 and lo2 <= hi1:
         return "SAME"
     return "INCREASED" if hi2 > hi1 else "CHANGED"
+
+
+def ceiling_increased(old: dict | None, new: dict | None) -> bool:
+    """Scoring rule (+5), separate from conflict detection: the latest stated upper bound is
+    higher than the previous stated upper bound. Uses the stated numbers - no ±10% for "around".
+    "around ₹5 Cr" → "₹5–6 Cr" is an increase (ceiling 5 → 6) even though the ranges overlap."""
+    if not old or not new:
+        return False
+    c1, c2 = old["currency"], new["currency"]
+    f1 = UNIT_FACTOR.get(old.get("unit", ""), 1.0) * (AED_TO_INR if c1 == "AED" and AED_TO_INR else 1.0)
+    f2 = UNIT_FACTOR.get(new.get("unit", ""), 1.0) * (AED_TO_INR if c2 == "AED" and AED_TO_INR else 1.0)
+    if AED_TO_INR:
+        c1, c2 = ("INR" if c == "AED" else c for c in (c1, c2))
+    return c1 == c2 and new["high"] * f2 > old["high"] * f1
 
 
 def remark_budgets(lead: dict) -> tuple[dict | None, dict | None]:

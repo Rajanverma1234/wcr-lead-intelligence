@@ -3,7 +3,7 @@
   (a) all 24 original leads   - data/WCR_AI_Intern_Practical_Candidate_Pack.xlsx (read only)
   (b) the scenario leads      - data/test_scenarios.xlsx
 
-Writes outputs/before_after.csv and outputs/before_after.md.
+Writes output/before_after.csv and output/before_after.md (same folder as processed_leads.xlsx).
 Run:  python scripts/compare_before_after.py
 """
 import sys
@@ -15,10 +15,10 @@ sys.path.insert(0, str(ROOT))
 import pandas as pd  # noqa: E402
 
 from src.compare import build_comparison, to_markdown  # noqa: E402
-from src.loader import DEFAULT_INPUT, load_leads  # noqa: E402
+from src.loader import DEFAULT_INPUT, OUTPUT_DIR, load_leads  # noqa: E402
 
 SCENARIOS = ROOT / "data" / "test_scenarios.xlsx"
-OUT_DIR = ROOT / "outputs"
+OUT_DIR = OUTPUT_DIR  # output/
 
 
 def main():

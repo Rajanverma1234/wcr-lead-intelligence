@@ -34,7 +34,7 @@ pytest -v
 
 # 6. Round 2: before vs after (legacy engine vs current engine)
 python scripts/make_test_scenarios.py      # (re)creates data/test_scenarios.xlsx (L900–L902)
-python scripts/compare_before_after.py     # writes outputs/before_after.csv and outputs/before_after.md
+python scripts/compare_before_after.py     # writes output/before_after.csv and output/before_after.md
 ```
 
 ### Round 2 corrections
@@ -42,9 +42,9 @@ python scripts/compare_before_after.py     # writes outputs/before_after.csv and
 | Area | What changed | Code |
 |---|---|---|
 | Timeline | Each remark is classified separately as CONFIRMED / TENTATIVE / VAGUE / UNCERTAIN / LONG_DELAY / NONE (English + common Hinglish). **The latest remark overrides the previous one.** The previous timeline goes to `Timeline_History` + a `TIMELINE_CHANGED` flag and **never adds points** once the latest remark changes it. UNCERTAIN/VAGUE are checked before numbers. | `src/timeline.py` |
-| Timeline points | CONFIRMED ≤1 / ≤3 / ≤6 months: +20 / +10 / +5 · TENTATIVE: +10 / +5 / +2 · VAGUE, UNCERTAIN, NONE: 0 · LONG_DELAY: −25. The Score_Breakdown always has an explicit `Timeline:` line. | `src/scoring.py` |
+| Timeline points | CONFIRMED ≤1 / ≤3 / ≤6 months: +20 / +10 / +5 · TENTATIVE: +10 / +5 / +2 · VAGUE, UNCERTAIN, NONE: 0 · LONG_DELAY (**strictly** > 6 months): −25. Exactly 6 months is CONFIRMED/TENTATIVE by wording. A "do not contact for N months" pause of 6 months or less is VAGUE (an earliest date, not a buying window). Month/year dates are measured from the lead's `Last_Contact_Date`, never today's date, so results are deterministic. The Score_Breakdown always has an explicit `Timeline:` line. | `src/scoring.py` |
 | Dependencies | A **list**, one item per distinct dependency, each with its own evidence clause (property sale, spouse/family approval, home loan, NRI fund transfer, possession, job transfer + round-1 rules). −10 each. New column `Dependencies_List`. | `src/dependencies.py` |
-| Conflicts | Typed flags: `TIMELINE_CHANGED`, `BUDGET_CHANGED`, `BUDGET_INCREASED`, `CURRENCY_DIFFERENT`, `PURPOSE_CHANGED`, `PROJECT_CHANGED`, `LOCATION_CHANGED`, `SITE_VISIT_CHANGED`, `CRM_VS_REMARK_MISMATCH`, `DUPLICATE_PHONE`. Budgets are compared as rupee ranges, so a change counts as a conflict only if the ranges don't overlap. AED is never converted unless `AED_TO_INR` is set. | `src/conflicts.py` |
+| Conflicts | Typed flags: `TIMELINE_CHANGED`, `BUDGET_CHANGED`, `BUDGET_INCREASED`, `CURRENCY_DIFFERENT`, `PURPOSE_CHANGED`, `PROJECT_CHANGED`, `LOCATION_CHANGED`, `SITE_VISIT_CHANGED`, `CRM_VS_REMARK_MISMATCH`, `DUPLICATE_PHONE`. Budgets are compared as rupee ranges, so a change counts as a conflict only if the ranges don't overlap. AED is never converted unless `AED_TO_INR` is set. The **+5 budget increased** score is separate: it compares the stated ceilings (latest upper bound > previous upper bound, no ±10% for "around"). So "around ₹5 Cr" → "₹5–6 Cr" scores +5 with no conflict flag. | `src/conflicts.py` |
 | Evidence | Each field is `{value, source, evidence, confidence}`. The source is `LATEST_REMARK`, `PREVIOUS_REMARK`, `CRM:<column>`, `DERIVED` or `NONE`, and the labels keep **Client remark** and **CRM column** apart. `validate_evidence()` checks that each quote is in **its own** remark and that every number, project, place or date in a value appears in that quote. Negated clauses ("NOT looking to invest") are ignored. Only explicit requests for material score. Location comes only from remarks; Market → `CRM_Market`. Anything that is removed is listed in `Validation_Issues`. | `src/evidence.py`, `src/negation.py` |
 | WhatsApp | `validate_whatsapp()` checks that every project, amount, date/window and location in the message is in the validated fields. It also blocks firm wording for an UNCERTAIN/VAGUE timeline, promises (discounts, prices, availability), other leads' names and unacknowledged dependencies. On failure the message is rebuilt from a safe template. Result in `WhatsApp_Validation` (PASS / FIXED + reasons). | `src/whatsapp_validator.py` |
 | Before vs After | `legacy/engine_v1` is a frozen copy of the round-1 engine. The comparison runs both engines live (CLI script, `/before-after` page on the web app, and a Streamlit tab). | `src/compare.py` |
@@ -120,12 +120,12 @@ dictionary (`WEIGHTS` at the top of `src/scoring.py`), so they are easy to expla
 | Timeline TENTATIVE ≤ 1 / ≤ 3 / ≤ 6 months | +10 / +5 / +2 |
 | Timeline VAGUE / UNCERTAIN / not mentioned | 0 |
 | Clear budget stated in remarks | +5 |
-| Budget increased vs previous remark | +5 |
+| Budget increased vs previous remark (latest stated ceiling > previous stated ceiling) | +5 |
 | Specific requirement (BHK, number of units, specific project) | +5 |
 | Actively requested material (payment plan, floor plan, inventory, comparison, options…) | +5 |
 | Each dependency (family decision, sell property, waiting for bonus/flight…) | −10 |
 | Budget mismatch / cannot stretch | −20 |
-| Timeline LONG_DELAY (> 6 months, or "not before / not for" ≥ 6 months) | −25 |
+| Timeline LONG_DELAY (strictly > 6 months, incl. "not before / not for" > 6 months) | −25 |
 | Not interested / asked not to follow up / no plan to buy | −40 |
 | No requirement captured at all (budget, timeline, purpose, project all missing) | −20 |
 
