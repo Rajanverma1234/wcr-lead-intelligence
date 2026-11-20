@@ -20,7 +20,10 @@ source .venv/bin/activate       # Mac / Linux
 # 2. Install
 pip install -r requirements.txt
 
-# 3. Process the Excel and write output/processed_leads.csv + .xlsx (no UI)
+# 3. Process the Excel (no UI). Writes to output/:
+#    processed_leads.xlsx  -> sheet "All_Leads" (every field, Lead_ID order)
+#                             sheet "Priority_List" (Rank 1..N, highest probability first, with Score_Breakdown)
+#    processed_leads.csv, priority_list.csv
 python run_pipeline.py
 
 # 4. Web app

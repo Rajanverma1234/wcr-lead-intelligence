@@ -2,15 +2,13 @@
 
 Run:  streamlit run app.py
 """
-import io
-
 import pandas as pd
 import streamlit as st
 
 from src.extractor import NA
 from src.llm_optional import available_providers
 from src.loader import DEFAULT_INPUT, OUTPUT_DIR, load_leads
-from src.pipeline import process_all, save_outputs
+from src.pipeline import priority_list, process_all, save_outputs, to_excel_bytes
 
 st.set_page_config(page_title="WCR Lead Intelligence", page_icon="🏠", layout="wide")
 TEMP_COLORS = {"Hot": "#ffd6d6", "Warm": "#fff1cc", "Cold": "#dbeafe"}
@@ -71,21 +69,19 @@ c3.metric("🌤 Warm", int((out["Lead_Temperature"] == "Warm").sum()))
 c4.metric("❄ Cold", int((out["Lead_Temperature"] == "Cold").sum()))
 
 # ---------------------------------------------------------------- downloads
-xlsx_buffer = io.BytesIO()
-out.to_excel(xlsx_buffer, index=False)
-d1, d2, _ = st.columns([1, 1, 4])
+d1, d2, d3, _ = st.columns([1, 1, 1.4, 3])
 d1.download_button("⬇ CSV", out.to_csv(index=False).encode("utf-8-sig"), "processed_leads.csv", "text/csv")
-d2.download_button("⬇ XLSX", xlsx_buffer.getvalue(), "processed_leads.xlsx",
+d2.download_button("⬇ XLSX", to_excel_bytes(out), "processed_leads.xlsx",  # All_Leads + Priority_List sheets
                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+d3.download_button("⬇ Priority list CSV", priority_list(out).to_csv(index=False).encode("utf-8-sig"),
+                   "priority_list.csv", "text/csv")
 
 tab1, tab2, tab3, tab4 = st.tabs(["Priority View", "Full Output", "Lead Detail", "Duplicates & Conflicts"])
 
 # ---------------------------------------------------------------- 1. priority view
 with tab1:
     st.subheader("Who to call first")
-    cols = ["Lead_ID", "Client_Name", "Market", "Lead_Temperature", "Buying_Probability_0_100",
-            "Confidence_0_100", "Budget", "Site_Visit_Status", "Next_Action"]
-    priority = view.sort_values(["Buying_Probability_0_100", "Confidence_0_100"], ascending=False)[cols]
+    priority = priority_list(view)  # same ranking as the Priority_List sheet in the Excel file
     st.dataframe(priority.style.apply(color_rows, axis=1), width="stretch", hide_index=True)
 
 # ---------------------------------------------------------------- 2. full output

@@ -22,7 +22,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # make "src" importable
 
 from src.loader import load_leads  # noqa: E402
-from src.pipeline import process_all  # noqa: E402
+from src.pipeline import priority_list, process_all, to_excel_bytes  # noqa: E402
 from src.scoring import WEIGHTS  # noqa: E402
 
 app = FastAPI(title="WCR Lead Intelligence")
@@ -40,12 +40,6 @@ def default_results():
 
 def e(value) -> str:
     return html.escape(str(value))
-
-
-def to_xlsx_bytes(df: pd.DataFrame) -> bytes:
-    buffer = io.BytesIO()
-    df.to_excel(buffer, index=False)
-    return buffer.getvalue()
 
 
 # ---------------------------------------------------------------- HTML rendering
@@ -138,11 +132,13 @@ def render_page(leads, out, details, temps, markets, min_prob, source_label, dow
     market_opts = "".join(f'<option value="{e(m)}" {"selected" if m in markets else ""}>{e(m)}</option>'
                           for m in all_markets)
 
-    priority = view.sort_values(["Buying_Probability_0_100", "Confidence_0_100"], ascending=False)
-    prio_cols = ["Lead_ID", "Client_Name", "Market", "Lead_Temperature", "Buying_Probability_0_100",
+    priority = priority_list(view)  # same ranking as the Priority_List sheet in the Excel file
+    prio_cols = ["Rank", "Lead_ID", "Client_Name", "Market", "Lead_Temperature", "Buying_Probability_0_100",
                  "Confidence_0_100", "Budget", "Site_Visit_Status", "Next_Action"]
     src_by_id = leads.set_index("Lead_ID")
-    detail_html = "".join(_lead_detail(i, r, src_by_id.loc[i], details[i]) for i, r in priority.set_index("Lead_ID").iterrows())
+    full_rows_in_priority_order = view.set_index("Lead_ID").loc[priority["Lead_ID"]]
+    detail_html = "".join(_lead_detail(i, r, src_by_id.loc[i], details[i])
+                          for i, r in full_rows_in_priority_order.iterrows())
 
     dups = out[out["Duplicate_Of"] != "None"].copy()
     dups["Reason"] = dups["Lead_ID"].map(lambda i: details[i].get("duplicate_reason", ""))
@@ -190,7 +186,8 @@ def index(temp: list[str] = Query(default=[]), market: list[str] = Query(default
     leads, out, details = default_results()
     temps = temp or ["Hot", "Warm", "Cold"]
     markets = market or sorted(out["Market"].unique())
-    downloads = '<a class="btn" href="/download.csv">⬇ CSV</a> <a class="btn" href="/download.xlsx">⬇ XLSX</a>'
+    downloads = ('<a class="btn" href="/download.csv">⬇ CSV</a> <a class="btn" href="/download.xlsx">⬇ XLSX '
+                 '(All_Leads + Priority_List)</a> <a class="btn" href="/priority_list.csv">⬇ Priority list CSV</a>')
     return render_page(leads, out, details, temps, markets, min_prob,
                        "data/WCR_AI_Intern_Practical_Candidate_Pack.xlsx (Lead_Data)", downloads)
 
@@ -204,7 +201,7 @@ async def upload(file: UploadFile = File(...)):
         return HTMLResponse(f"<p>Could not process the file: {e(exc)}</p><p><a href='/'>Back</a></p>", status_code=400)
     # Stateless: embed the downloads directly in the page (nothing is stored on the server)
     csv_b64 = base64.b64encode(out.to_csv(index=False).encode("utf-8-sig")).decode()
-    xlsx_b64 = base64.b64encode(to_xlsx_bytes(out)).decode()
+    xlsx_b64 = base64.b64encode(to_excel_bytes(out)).decode()
     downloads = (f'<a class="btn" download="processed_leads.csv" href="data:text/csv;base64,{csv_b64}">⬇ CSV</a> '
                  f'<a class="btn" download="processed_leads.xlsx" href="data:application/vnd.openxmlformats-'
                  f'officedocument.spreadsheetml.sheet;base64,{xlsx_b64}">⬇ XLSX</a> <a class="btn" href="/">Back to sample data</a>')
@@ -222,9 +219,16 @@ def download_csv():
 @app.get("/download.xlsx")
 def download_xlsx():
     _, out, _ = default_results()
-    return Response(to_xlsx_bytes(out),
+    return Response(to_excel_bytes(out),
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": "attachment; filename=processed_leads.xlsx"})
+
+
+@app.get("/priority_list.csv")
+def download_priority_csv():
+    _, out, _ = default_results()
+    return Response(priority_list(out).to_csv(index=False).encode("utf-8-sig"), media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=priority_list.csv"})
 
 
 @app.get("/api/leads")

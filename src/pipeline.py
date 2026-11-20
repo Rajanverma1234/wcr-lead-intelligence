@@ -113,12 +113,46 @@ def process_all(df: pd.DataFrame, use_llm: bool = False, llm_provider: str = "an
     return pd.DataFrame(rows, columns=OUTPUT_COLUMNS + EXTRA_COLUMNS), details
 
 
+PRIORITY_COLUMNS = [
+    "Rank", "Lead_ID", "Client_Name", "Market", "Lead_Temperature", "Buying_Probability_0_100",
+    "Confidence_0_100", "Budget", "Timeline", "Site_Visit_Status", "Objection_or_Dependency",
+    "Next_Action", "Score_Breakdown",
+]
+
+
+def priority_list(out_df: pd.DataFrame) -> pd.DataFrame:
+    """Leads from highest to lowest priority.
+
+    Sort: Buying probability (high first) -> Confidence (high first) -> Lead_ID.
+    """
+    ranked = out_df.sort_values(["Buying_Probability_0_100", "Confidence_0_100", "Lead_ID"],
+                                ascending=[False, False, True]).reset_index(drop=True)
+    ranked.insert(0, "Rank", range(1, len(ranked) + 1))
+    return ranked[PRIORITY_COLUMNS]
+
+
+def to_excel_bytes(out_df: pd.DataFrame) -> bytes:
+    """Workbook with two sheets: All_Leads (Lead_ID order) and Priority_List (ranked)."""
+    import io
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        for sheet, df in (("All_Leads", out_df), ("Priority_List", priority_list(out_df))):
+            df.to_excel(writer, sheet_name=sheet, index=False)
+            ws = writer.sheets[sheet]
+            ws.freeze_panes = "B2"  # keep header row and first column visible
+            for col_cells in ws.columns:  # readable column widths (capped)
+                longest = max(len(str(c.value or "")) for c in col_cells)
+                ws.column_dimensions[col_cells[0].column_letter].width = min(max(10, longest + 2), 60)
+    return buffer.getvalue()
+
+
 def save_outputs(out_df: pd.DataFrame, output_dir) -> tuple:
-    """Write CSV (utf-8-sig so ₹ opens correctly in Excel) and XLSX."""
+    """Write processed_leads.csv, priority_list.csv (utf-8-sig so ₹ opens in Excel) and processed_leads.xlsx."""
     from pathlib import Path
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path, xlsx_path = output_dir / "processed_leads.csv", output_dir / "processed_leads.xlsx"
     out_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
-    out_df.to_excel(xlsx_path, index=False)
+    priority_list(out_df).to_csv(output_dir / "priority_list.csv", index=False, encoding="utf-8-sig")
+    xlsx_path.write_bytes(to_excel_bytes(out_df))
     return csv_path, xlsx_path

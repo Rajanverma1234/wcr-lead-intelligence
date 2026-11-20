@@ -177,6 +177,23 @@ def test_no_currency_conversion(result):
         assert "AED" in out.loc[lead_id, "Budget"]
 
 
+def test_priority_list_sheet(result):
+    import io
+
+    import pandas as pd
+
+    from src.pipeline import to_excel_bytes
+    _, out, _ = result
+    sheets = pd.read_excel(io.BytesIO(to_excel_bytes(out.reset_index(drop=True))), sheet_name=None)
+    assert list(sheets) == ["All_Leads", "Priority_List"]
+    prio = sheets["Priority_List"]
+    assert len(prio) == 24 and set(prio.Lead_ID) == set(out.Lead_ID)
+    assert list(prio.Rank) == list(range(1, 25))
+    assert prio.Buying_Probability_0_100.is_monotonic_decreasing
+    assert prio.Lead_ID.iloc[0] == "L016"
+    assert prio.Score_Breakdown.notna().all()
+
+
 def test_validator_rejects_invented_evidence():
     from src.extractor import FieldResult
     from src.validator import validate_field
