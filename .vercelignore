@@ -1,4 +1,4 @@
-# Keep the Vercel bundle lean: only api/, src/, data/ and vercel.json are needed
+# Keep the Vercel bundle lean: only api/, src/, legacy/, data/ and vercel.json are needed
 .venv
 output
 outputs

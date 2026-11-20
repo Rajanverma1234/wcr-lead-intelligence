@@ -29,9 +29,31 @@ python run_pipeline.py
 # 4. Web app
 streamlit run app.py            # opens http://localhost:8501 -> click "Process Leads"
 
-# 5. Tests (21 acceptance tests)
+# 5. Tests (55: 23 round-1 acceptance tests + 32 round-2 correction tests)
 pytest -v
+
+# 6. Round 2: before vs after (legacy engine vs current engine)
+python scripts/make_test_scenarios.py      # (re)creates data/test_scenarios.xlsx (L900–L902)
+python scripts/compare_before_after.py     # writes outputs/before_after.csv and outputs/before_after.md
 ```
+
+### Round 2 corrections
+
+| Area | What changed | Code |
+|---|---|---|
+| Timeline | Each remark is classified separately as CONFIRMED / TENTATIVE / VAGUE / UNCERTAIN / LONG_DELAY / NONE (English + common Hinglish). **The latest remark overrides the previous one.** The previous timeline goes to `Timeline_History` + a `TIMELINE_CHANGED` flag and **never adds points** once the latest remark changes it. UNCERTAIN/VAGUE are checked before numbers. | `src/timeline.py` |
+| Timeline points | CONFIRMED ≤1 / ≤3 / ≤6 months: +20 / +10 / +5 · TENTATIVE: +10 / +5 / +2 · VAGUE, UNCERTAIN, NONE: 0 · LONG_DELAY: −25. The Score_Breakdown always has an explicit `Timeline:` line. | `src/scoring.py` |
+| Dependencies | A **list**, one item per distinct dependency, each with its own evidence clause (property sale, spouse/family approval, home loan, NRI fund transfer, possession, job transfer + round-1 rules). −10 each. New column `Dependencies_List`. | `src/dependencies.py` |
+| Conflicts | Typed flags: `TIMELINE_CHANGED`, `BUDGET_CHANGED`, `BUDGET_INCREASED`, `CURRENCY_DIFFERENT`, `PURPOSE_CHANGED`, `PROJECT_CHANGED`, `LOCATION_CHANGED`, `SITE_VISIT_CHANGED`, `CRM_VS_REMARK_MISMATCH`, `DUPLICATE_PHONE`. Budgets are compared as rupee ranges, so a change counts as a conflict only if the ranges don't overlap. AED is never converted unless `AED_TO_INR` is set. | `src/conflicts.py` |
+| Evidence | Each field is `{value, source, evidence, confidence}`. The source is `LATEST_REMARK`, `PREVIOUS_REMARK`, `CRM:<column>`, `DERIVED` or `NONE`, and the labels keep **Client remark** and **CRM column** apart. `validate_evidence()` checks that each quote is in **its own** remark and that every number, project, place or date in a value appears in that quote. Negated clauses ("NOT looking to invest") are ignored. Only explicit requests for material score. Location comes only from remarks; Market → `CRM_Market`. Anything that is removed is listed in `Validation_Issues`. | `src/evidence.py`, `src/negation.py` |
+| WhatsApp | `validate_whatsapp()` checks that every project, amount, date/window and location in the message is in the validated fields. It also blocks firm wording for an UNCERTAIN/VAGUE timeline, promises (discounts, prices, availability), other leads' names and unacknowledged dependencies. On failure the message is rebuilt from a safe template. Result in `WhatsApp_Validation` (PASS / FIXED + reasons). | `src/whatsapp_validator.py` |
+| Before vs After | `legacy/engine_v1` is a frozen copy of the round-1 engine. The comparison runs both engines live (CLI script, `/before-after` page on the web app, and a Streamlit tab). | `src/compare.py` |
+
+New output columns (all existing columns kept): `Timeline_Category`, `Timeline_History`, `Dependencies_List`,
+`CRM_Market`, `Field_Sources`, `Validation_Issues`, `WhatsApp_Validation`.
+Scenario L900 (latest remark: "timeline uncertain", property sale + wife approval) drops from 45 Warm to **25 Cold**.
+Scenario L901 (tentative 2–3 months, home loan) drops from 80 Hot to **55 Warm**.
+The original workbook is never modified; a test checks its SHA-256.
 
 No API key is needed. The optional LLM layer is off by default (see section 8).
 
@@ -94,16 +116,16 @@ dictionary (`WEIGHTS` at the top of `src/scoring.py`), so they are easy to expla
 | Negotiating / asked for final offer | **+30** |
 | Site visit completed or confirmed | **+25** |
 | Site visit tentative | +10 |
-| Timeline ≤ 30 days / "this month" | +20 |
-| Timeline ≤ 3 months | +10 |
-| Timeline ≤ 6 months | +5 |
+| Timeline CONFIRMED ≤ 1 / ≤ 3 / ≤ 6 months | +20 / +10 / +5 |
+| Timeline TENTATIVE ≤ 1 / ≤ 3 / ≤ 6 months | +10 / +5 / +2 |
+| Timeline VAGUE / UNCERTAIN / not mentioned | 0 |
 | Clear budget stated in remarks | +5 |
 | Budget increased vs previous remark | +5 |
 | Specific requirement (BHK, number of units, specific project) | +5 |
 | Actively requested material (payment plan, floor plan, inventory, comparison, options…) | +5 |
 | Each dependency (family decision, sell property, waiting for bonus/flight…) | −10 |
 | Budget mismatch / cannot stretch | −20 |
-| Timeline > 6 months, or "not before / not for" ≥ 6 months | −25 |
+| Timeline LONG_DELAY (> 6 months, or "not before / not for" ≥ 6 months) | −25 |
 | Not interested / asked not to follow up / no plan to buy | −40 |
 | No requirement captured at all (budget, timeline, purpose, project all missing) | −20 |
 
@@ -121,6 +143,7 @@ visit on Sunday at 12 PM with her husband. Send location and floor plan today."*
 | Step | Points | Running total |
 |---|---|---|
 | Base | 40 | 40 |
+| Timeline: NONE – no purchase timeline in either remark | 0 | 40 |
 | Site visit confirmed ("She confirmed she can visit on Sunday at 12 PM") | +25 | 65 |
 | Clear budget stated (Up to ₹6.5 Cr) | +5 | 70 |
 | Budget increased (₹4 Cr → ₹6.5 Cr) | +5 | 75 |
@@ -142,16 +165,16 @@ The exact same breakdown is shown in the `Score_Breakdown` column and in the app
    A pytest test checks this for every field of every lead.
 3. **No currency conversion** – `₹` stays `₹`, `AED` stays `AED`. L014 is "Around AED 2M"; the CRM's
    "₹5 Cr equivalent" is only shown as a conflict, never converted.
-4. **No fake dates** – "sometime next year" → *"Sometime next year (no month given)"*; "maybe within 3–4 months"
-   → *"Within 3–4 months (tentative)"*. A month/year is shown only if it is written in the text (December 2027).
-5. **Template-based WhatsApp + validation** – messages are filled from extracted fields only. Then every number,
-   ₹/AED, month, weekday, project and location in the message must exist in the row, otherwise a generic,
-   fact-free message is used. Leads who asked not to be contacted get *"Not Applicable – client asked not to be
-   contacted for now"*.
+4. **No fake dates** – the Timeline column shows the client's own words with the category, e.g.
+   *"Vague: sometime next year"*, *"Tentative: maybe within 3–4 months"*. A month/year is shown only if it is
+   written in the text (December 2027). `months_estimate` is used only for scoring.
+5. **Template-based WhatsApp + validation** – messages are filled from validated fields only, then checked by
+   `validate_whatsapp()` (round 2, see above). On failure a safe template is used and `WhatsApp_Validation`
+   says why. Leads who asked not to be contacted get *"Not Applicable – client asked not to be contacted for now"*.
 6. **LLM output is re-validated** – the optional LLM never bypasses the validator, and scoring is always rule-based.
 
 **Confidence (0–100)** = average of field confidences: 90 explicit in latest remark · 75 only in previous remark ·
-60 only in a structured column · 50 inferred (e.g. Market column used as location fallback) · 100 for
+60 only in a CRM column · 40 if the validator removed a value · 100 for
 "Not Available" when nothing exists (we are sure it is absent) · −10 if that field has a conflict.
 
 ---
@@ -159,11 +182,13 @@ The exact same breakdown is shown in the `Score_Breakdown` column and in the app
 ## 5. Conflict handling
 
 Latest remark wins, but the old value is never lost. The same finder function is run separately on
-previous and latest remarks (and on `Recorded_Budget`) and differences go to `Conflict_Flags`:
+previous and latest remarks (and on the CRM columns), and differences go to `Conflict_Flags` as typed flags:
 
-- L002: `Budget changed: Around ₹4 Cr (previous remark, Recorded_Budget) → Up to ₹6.5 Cr (latest)`
-- L014: `Budget changed: ₹5 Cr equivalent (Recorded_Budget) → Around AED 2M (latest)`
-- L020: `Timeline changed: This quarter (previous) → No purchase for at least 12 months (latest)`
+- L002: `BUDGET_INCREASED: "Around ₹4 Cr" (previous remark) → "Up to ₹6.5 Cr" (latest remark)` and
+  `CRM_VS_REMARK_MISMATCH: CRM Recorded_Budget "₹4 Cr" vs "Up to ₹6.5 Cr" (latest remark)`
+- L014: `CURRENCY_DIFFERENT: CRM Recorded_Budget "₹5 Cr equivalent" vs "Around AED 2M" (latest remark) – not converted`
+- L020: `TIMELINE_CHANGED: "this quarter" (previous remark) → "no investment for at least 12 months" (latest remark)`
+- L009: no flag – "₹7–8 Cr" and "up to ₹8 Cr" overlap, so the budget did not really change.
 
 ## 6. Duplicate detection
 
