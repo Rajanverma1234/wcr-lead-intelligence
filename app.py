@@ -76,7 +76,8 @@ d2.download_button("⬇ XLSX", to_excel_bytes(out), "processed_leads.xlsx",  # A
 d3.download_button("⬇ Priority list CSV", priority_list(out).to_csv(index=False).encode("utf-8-sig"),
                    "priority_list.csv", "text/csv")
 
-tab1, tab2, tab3, tab4 = st.tabs(["Priority View", "Full Output", "Lead Detail", "Duplicates & Conflicts"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Priority View", "Full Output", "Lead Detail", "Duplicates & Conflicts",
+                                        "Before vs After"])
 
 # ---------------------------------------------------------------- 1. priority view
 with tab1:
@@ -119,7 +120,7 @@ with tab3:
         field_rows.append({
             "Field": name, "Value": f["value"],
             "Evidence": " | ".join(f["evidence"]) if f["evidence"] else "—",
-            "Confidence": f["confidence"], "Source": f["source"],
+            "Confidence": f["confidence"], "Source": f.get("source_label", f["source"]),
             "Conflict": " | ".join(det["conflicts"].get(name, [])) or "—",
             "Note": f["note"] or "",
         })
@@ -146,3 +147,14 @@ with tab4:
         st.dataframe(conf, width="stretch", hide_index=True)
     else:
         st.write("No conflicts found.")
+
+# ---------------------------------------------------------------- 5. before vs after
+with tab5:
+    from src.compare import build_comparison
+    from src.loader import PROJECT_ROOT
+    st.caption("Frozen round-1 engine (legacy/engine_v1) vs current engine, both run live on the same leads.")
+    st.dataframe(build_comparison(leads, "Current input"), width="stretch", hide_index=True)
+    scenarios = PROJECT_ROOT / "data" / "test_scenarios.xlsx"
+    if scenarios.exists():
+        st.subheader("Test scenarios (data/test_scenarios.xlsx)")
+        st.dataframe(build_comparison(load_leads(scenarios), "Test scenarios"), width="stretch", hide_index=True)

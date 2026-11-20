@@ -102,7 +102,8 @@ def _lead_detail(lead_id, r, src, det) -> str:
         conflict = " | ".join(det["conflicts"].get(name, [])) or "—"
         evidence = " | ".join(f["evidence"]) or "—"
         rows.append(f"<tr><td>{e(name)}</td><td><b>{e(f['value'])}</b></td><td>{e(evidence)}</td>"
-                    f"<td>{e(f['confidence'])}</td><td>{e(f['source'])}</td><td>{e(conflict)}</td></tr>")
+                    f"<td>{e(f['confidence'])}</td><td>{e(f.get('source_label', f['source']))}</td>"
+                    f"<td>{e(conflict)}</td></tr>")
     breakdown = "".join(f"<li>{e(line)}</li>" for line in det["score_breakdown"])
     dup = f"<p><b>Possible duplicate of {e(r['Duplicate_Of'])}</b> – {e(det.get('duplicate_reason', ''))}</p>" \
         if r["Duplicate_Of"] != "None" else ""
@@ -167,7 +168,8 @@ def render_page(leads, out, details, temps, markets, min_prob, source_label, dow
 <button type="submit">Process Leads</button> {downloads_html}</form>
 
 <nav><a href="#priority">Priority View</a><a href="#full">Full Output</a><a href="#detail">Lead Detail</a>
-<a href="#dupes">Duplicates &amp; Conflicts</a><a href="#how">How scoring works</a></nav>
+<a href="#dupes">Duplicates &amp; Conflicts</a><a href="#how">How scoring works</a>
+<a href="/before-after">Before vs After</a></nav>
 
 <h2 id="priority">Priority View ({len(priority)} leads)</h2>{_row_table(priority, prio_cols)}
 <h2 id="full">Full Output</h2>{_row_table(view, list(out.columns), wide=True)}
@@ -177,6 +179,9 @@ def render_page(leads, out, details, temps, markets, min_prob, source_label, dow
 <h2 id="how">How Buying Probability is calculated</h2>
 <p>Start at 40, add/subtract each rule that fires, clamp to 0–100. Hot ≥ 70 · Warm 40–69 · Cold &lt; 40.
  Not interested / do-not-follow-up / no investment for 12+ months is always Cold.</p><ul>{weights}</ul>
+<p><b>Timeline points</b> (latest remark wins; a previous timeline never adds points once the latest
+ remark changes it): CONFIRMED ≤1 month +20 · ≤3 months +10 · ≤6 months +5 · TENTATIVE ≤1 month +10 ·
+ ≤3 months +5 · ≤6 months +2 · VAGUE / UNCERTAIN / NONE 0 · LONG_DELAY (&gt;6 months) {WEIGHTS['far_timeline']}.</p>
 </div></body></html>"""
 
 
@@ -229,6 +234,51 @@ def download_priority_csv():
     _, out, _ = default_results()
     return Response(priority_list(out).to_csv(index=False).encode("utf-8-sig"), media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=priority_list.csv"})
+
+
+_COMPARE_CACHE: dict = {}
+SCENARIO_FILE = Path(__file__).resolve().parent.parent / "data" / "test_scenarios.xlsx"
+
+
+def comparison_table() -> pd.DataFrame:
+    """Legacy engine vs current engine, computed live on the bundled files (cached per instance)."""
+    if "table" not in _COMPARE_CACHE:
+        from src.compare import build_comparison
+        parts = [build_comparison(load_leads(), "Original leads (L001–L024)")]
+        if SCENARIO_FILE.exists():
+            parts.append(build_comparison(load_leads(SCENARIO_FILE), "Test scenarios (L900–L902)"))
+        _COMPARE_CACHE["table"] = pd.concat(parts, ignore_index=True)
+    return _COMPARE_CACHE["table"]
+
+
+@app.get("/before-after", response_class=HTMLResponse)
+def before_after():
+    table = comparison_table()
+    cols = [c for c in table.columns if c != "Dataset"]
+    sections = []
+    for dataset, part in table.groupby("Dataset", sort=False):
+        head = "".join(f"<th>{e(c)}</th>" for c in cols)
+        body = "".join(
+            f'<tr class="{e(r["Temp_After"])}">' + "".join(f"<td>{e(r[c])}</td>" for c in cols) + "</tr>"
+            for _, r in part.iterrows())
+        changed = int((part["Score_Change"] != 0).sum())
+        sections.append(f"<h2>{e(dataset)}</h2><p class='muted'>Score changed for {changed} of {len(part)} leads."
+                        f"</p><div class='tbl'><table class='wide'><tr>{head}</tr>{body}</table></div>")
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Before vs After</title>
+<style>{CSS}</style></head><body><div class="wrap">
+<h1>Before vs After – round 1 engine vs round 2 engine</h1>
+<p class="muted">Both engines run live on the same leads every time this page is built: the frozen
+round-1 engine (<code>legacy/engine_v1</code>) and the current engine (<code>src/</code>).
+"Changed because" is derived from the two score breakdowns – nothing is pasted.</p>
+<nav><a href="/">← Back to dashboard</a><a href="/before-after.csv">⬇ before_after.csv</a></nav>
+{''.join(sections)}</div></body></html>"""
+
+
+@app.get("/before-after.csv")
+def before_after_csv():
+    return Response(comparison_table().to_csv(index=False).encode("utf-8-sig"), media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=before_after.csv"})
 
 
 @app.get("/api/leads")
