@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date
 
+from .dependencies import extract_dependencies
 from .timeline import LATEST as TL_LATEST
 from .timeline import NONE as TL_NONE
 from .timeline import resolve_timeline
@@ -129,7 +130,7 @@ def parse_budget_text(text: str) -> dict | None:
         qualifier = "Around"
     value = f"{qualifier} {amount}".strip()
     return {
-        "value": value, "currency": kind, "unit": unit,
+        "value": value, "currency": kind, "unit": unit, "qualifier": qualifier,
         "low": float(low), "high": float(high or low), "raw": m.group(0),
     }
 
@@ -207,28 +208,27 @@ def find_projects(sentences):
 
 
 def extract_projects(lead) -> FieldResult:
-    latest, previous = lead_sentences(lead)
-    result = _from_sources(find_projects, latest, previous)
-    names = list(result.meta["names"]) if result else []
-    evidence = list(result.evidence) if result else []
+    """Projects the client named in a remark (latest, else previous); else the CRM column.
 
-    # Add projects from the Recorded_Project column (split "A / B"), deduplicated
+    The CRM column is never mixed into a remark value - a difference is flagged instead.
+    """
+    latest, previous = lead_sentences(lead)
     recorded = lead.get("Recorded_Project", "")
-    added_from_column = False
+    crm_names = []
     for part in [p.strip() for p in recorded.split("/") if p.strip()]:
         for name, pattern in KNOWN_PROJECTS.items():
-            if re.search(pattern, part, re.IGNORECASE) and name not in names:
-                names.append(name)
-                added_from_column = True
-    if added_from_column:
-        evidence.append(f"Recorded_Project: {recorded}")
+            if re.search(pattern, part, re.IGNORECASE) and name not in crm_names:
+                crm_names.append(name)
 
-    if not names:
-        return FieldResult()
+    result = _from_sources(find_projects, latest, previous)
     if result:
-        return FieldResult(", ".join(names), evidence, result.confidence, result.source, {"names": names})
-    return FieldResult(", ".join(names), evidence, CONFIDENCE["structured"], "structured",
-                       {"names": names}, note="From Recorded_Project column only")
+        result.meta["crm_names"] = crm_names
+        return result
+    if crm_names:
+        return FieldResult(", ".join(crm_names), [f"Recorded_Project: {recorded}"], CONFIDENCE["structured"],
+                           "structured", {"names": crm_names, "crm_names": crm_names},
+                           note="From CRM column Recorded_Project only")
+    return FieldResult()
 
 
 # ================================================================ LOCATION
@@ -300,53 +300,15 @@ def extract_site_visit(lead) -> FieldResult:
 
 
 # ================================================================ OBJECTION / DEPENDENCY
-# kind: "dependency" (-10 each), "mismatch" (-20), "not_interested" (-40), "info" (no score impact)
-OBJECTION_RULES = [
-    (r"\bsell(?:ing)? (?:his|her|their|the) (\w+) property", "Must sell {0} property first", "dependency"),
-    (r"discussing with (?:her |his |the )?family", "Family decision pending", "dependency"),
-    (r"wife will take the final decision", "Wife will take the final decision", "dependency"),
-    (r"payment plan first|if (?:the )?payment plan is suitable", "Payment plan needed before deciding", "dependency"),
-    (r"before (?:scheduling|deciding on) (?:the |a )?visit", "Wants details before committing to a visit", "dependency"),
-    (r"legal/RERA|\bRERA\b", "Needs legal/RERA details", "info"),
-    (r"cannot stretch|can't stretch|can not stretch", "Budget mismatch – client cannot stretch budget", "mismatch"),
-    (r"funds (?:are )?tied up", "Funds tied up in another property", "dependency"),
-    (r"after (?:his |her )?annual bonus|waiting for (?:his |her )?bonus", "Waiting for annual bonus", "dependency"),
-    (r"flight confirmation", "Waiting for flight confirmation", "dependency"),
-    (r"only if (?:the )?numbers make sense", "Will buy only if the numbers make sense", "dependency"),
-    (r"\bcomparing\b", "Comparing projects before deciding", "info"),
-    (r"not interested", "Not interested currently", "not_interested"),
-    (r"not to follow up", "Asked not to be followed up", "not_interested"),
-    (r"no plan to buy", "No plan to buy right now", "not_interested"),
-    (r"no investment for", "No investment planned for now", "info"),
-    (r"not looking to invest before", "Not investing before the stated date", "info"),
-    (r"casually asked", "Only a casual price enquiry", "info"),
-    (r"has not agreed to a site visit", "Has not agreed to a site visit yet", "info"),
-    (r"ready or near-ready", "Needs a ready or near-ready unit", "info"),
-    (r"if (?:he|she) comes from (\w+)", "Relative's visit depends on travel from {0}", "info"),
-    (r"if (?:he|she) likes the unit", "Decision depends on liking the unit", "info"),
-]
-
-
-def find_objections(sentences):
-    labels, evidence, kinds = [], [], []
-    for s in sentences:
-        for pattern, template, kind in OBJECTION_RULES:
-            m = re.search(pattern, s, re.IGNORECASE)
-            if m:
-                label = template.format(*m.groups())
-                if label not in labels:
-                    labels.append(label)
-                    kinds.append(kind)
-                    if s not in evidence:
-                        evidence.append(s)
-    if not labels:
-        return None
-    return "; ".join(labels), evidence, {"items": list(zip(labels, kinds))}
-
-
+# Round 2: a list with one item per distinct dependency (see dependencies.py).
 def extract_objections(lead) -> FieldResult:
-    latest, previous = lead_sentences(lead)
-    return _from_sources(find_objections, latest, previous) or FieldResult(meta={"items": []})
+    items = extract_dependencies(lead)
+    if not items:
+        return FieldResult(meta={"items": [], "list": []})
+    evidence = list(dict.fromkeys(i["evidence"] for i in items))
+    source = "latest" if items[0]["source"] == "LATEST_REMARK" else "previous"
+    return FieldResult(" | ".join(i["label"] for i in items), evidence, CONFIDENCE[source], source,
+                       {"items": [(i["label"], i["kind"]) for i in items], "list": items})
 
 
 # ================================================================ SIGNALS (used by scoring + messaging)

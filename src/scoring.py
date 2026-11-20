@@ -6,7 +6,8 @@ sentence that triggered it, so any score can be explained line by line.
 """
 from __future__ import annotations
 
-from .extractor import NA, parse_budget_text
+from .conflicts import compare_budgets, remark_budgets
+from .extractor import NA
 
 # ---- All weights in ONE place (easy to explain and tune) -------------------
 WEIGHTS = {
@@ -100,11 +101,10 @@ def score_lead(lead: dict, fields: dict, signals: dict) -> dict:
     budget = fields["Budget"]
     if budget.value != NA and budget.source in ("latest", "previous"):
         apply("clear_budget", f"clear budget stated: {budget.value}")
-    # Budget increased = latest upper amount is higher than the previous remark (same currency)
-    prev = parse_budget_text(lead.get("Previous_Remarks", ""))
-    if prev and budget.source == "latest" and prev["currency"] == budget.meta.get("currency") \
-            and budget.meta.get("high", 0) > prev["high"]:
-        apply("budget_increased", f"budget increased: {prev['value']} → {budget.value}")
+    # Budget increased = previous and latest remark ranges do NOT overlap and latest is higher
+    old, new = remark_budgets(lead)
+    if budget.source == "latest" and compare_budgets(old, new) == "INCREASED":
+        apply("budget_increased", f"budget increased: {old['value']} → {new['value']}")
 
     # Specific requirement and requested material
     if signals.get("specific_requirement"):

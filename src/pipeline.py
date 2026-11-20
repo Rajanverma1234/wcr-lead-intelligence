@@ -22,7 +22,7 @@ OUTPUT_COLUMNS = [  # exact names from the Output_Template sheet
 ]
 EXTRA_COLUMNS = ["Client_Name", "Market", "Conflict_Flags", "Duplicate_Of", "Score_Breakdown",
                  # round 2
-                 "Timeline_Category", "Timeline_History"]
+                 "Timeline_Category", "Timeline_History", "Dependencies_List"]
 FIELD_LABELS = {  # short labels used inside the Evidence column
     "Budget": "Budget", "Timeline": "Timeline", "Purpose": "Purpose",
     "Projects_Discussed": "Projects", "Location_Preference": "Location",
@@ -41,7 +41,13 @@ def _evidence_column(fields: dict) -> str:
     return " | ".join(f'{"/".join(labels)}: "{quote}"' for quote, labels in by_quote.items()) or NA
 
 
-def process_lead(row, duplicate_of: str = "", llm_fields: dict | None = None) -> tuple[dict, dict]:
+def _dependencies_column(fields: dict) -> str:
+    deps = [i for i in fields["Objection_or_Dependency"].meta.get("list", []) if i["kind"] == "dependency"]
+    return " | ".join(f'{i["label"]} ("{i["evidence"]}")' for i in deps) or "None"
+
+
+def process_lead(row, duplicate_of: str = "", llm_fields: dict | None = None,
+                 duplicate_reason: str = "") -> tuple[dict, dict]:
     lead = {k: ("" if pd.isna(v) else str(v)) for k, v in dict(row).items()}
     source_text = build_source_text(lead)
 
@@ -57,6 +63,8 @@ def process_lead(row, duplicate_of: str = "", llm_fields: dict | None = None) ->
 
     # 3. Conflicts (latest wins, but recorded) -> lower that field's confidence by 10
     conflicts = detect_conflicts(lead, fields)
+    if duplicate_of and "Same phone" in duplicate_reason:
+        conflicts.setdefault("Duplicate", []).append(f"DUPLICATE_PHONE: same phone as {duplicate_of}")
     for name in conflicts:
         if name in display_fields:
             display_fields[name].confidence = max(0, display_fields[name].confidence - 10)
@@ -88,6 +96,7 @@ def process_lead(row, duplicate_of: str = "", llm_fields: dict | None = None) ->
         "Score_Breakdown": " | ".join(score["breakdown"]),
         "Timeline_Category": fields["Timeline"].meta["category"],
         "Timeline_History": fields["Timeline"].meta["resolution"]["history"] or "None",
+        "Dependencies_List": _dependencies_column(fields),
     }
     details = {
         "fields": {name: res.as_dict() for name, res in display_fields.items()},
@@ -110,7 +119,7 @@ def process_all(df: pd.DataFrame, use_llm: bool = False, llm_provider: str = "an
         if use_llm:
             from .llm_optional import llm_extract_validated
             llm_fields = llm_extract_validated(dict(row), provider=llm_provider)
-        out, det = process_lead(row, dup.get("duplicate_of", ""), llm_fields)
+        out, det = process_lead(row, dup.get("duplicate_of", ""), llm_fields, dup.get("reason", ""))
         det["duplicate_reason"] = dup.get("reason", "")
         rows.append(out)
         details[lead_id] = det
